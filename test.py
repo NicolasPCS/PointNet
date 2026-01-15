@@ -64,7 +64,7 @@ parser.add_argument('--workers', type=int, help="NUMBER OF DATALOADING WORKERS",
 parser.add_argument('--nepoch', type=int, default=5, help="NUMBER OF EPOCHS TO TRAIN FOR")
 parser.add_argument('--output_folder', type=str, default='classification', help="OUTPUT FOLDER")
 parser.add_argument('--model', type=str, default='', help="MODEL PATH")
-parser.add_argument('--dataset_path', type=str, default='/home/ncaytuir/data-local/PointNet/data/Shapenetcore_benchmark', help="DATASET PATH")
+parser.add_argument('--dataset_path', type=str, default='/home/ncaytuir/PointNet/data/Shapenetcore_benchmark', help="DATASET PATH")
 parser.add_argument('--dataset_type', type=str, default="shapenet", help="DATASET TYPE")
 parser.add_argument('--feature_transform', action='store_true', help="USE FEATURE TRANSFORM")
 parser.add_argument('--inference', action='store_false', help="INFERENCE")
@@ -81,9 +81,9 @@ print(f"Validation set length = {len(val_set)}")
 print(f"Test set length = {len(test_set)}")
 
 # Data loaders
-train_loader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, collate_fn=collate_fn)
-val_loader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, collate_fn=collate_fn)
-test_loader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, collate_fn=collate_fn)
+train_loader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, drop_last=True, collate_fn=collate_fn)
+val_loader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, drop_last=True, collate_fn=collate_fn)
+test_loader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, drop_last=True, collate_fn=collate_fn)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

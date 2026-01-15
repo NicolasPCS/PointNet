@@ -10,7 +10,7 @@ import numpy as np
 import torch.optim as optim
 import torch.nn as nn
 from data.dataset import ShapeNetDataset
-from model.pointnet import PointNetClassification, feature_transform_regularizer
+from model.pointnet2 import PointNetClassification
 import torch.nn.functional as F
 from tqdm import tqdm
 
@@ -31,14 +31,22 @@ def train(model, num_epochs, criterion, optimizer, dataloader_train, label_str =
         # Training
         model.train()
         train_loss = 0.0
+        correct = 0
+        total = 0
+
         for batch_dict in tqdm(dataloader_train, total=len(dataloader_train)):
             # Forward pass
             x = batch_dict['points'].transpose(1, 2).to(device)
             
             labels = batch_dict[label_str].to(device)
-            pred, _, _ = model(x)
+            pred = model(x)
             loss = criterion(pred, labels)
             train_loss += loss.item()
+
+            # Accuracy
+            _, predicted = torch.max(pred, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
 
             # Backward pass
             loss.backward()
@@ -51,26 +59,31 @@ def train(model, num_epochs, criterion, optimizer, dataloader_train, label_str =
         
         # Compute per batch losses, metric value
         train_loss = train_loss / len(dataloader_train)
+        train_acc = correct / total
 
-        print(f'EPOCH: {epoch+1}, TRAIN LOSS:{train_loss:6.5f}')
+        print(f'EPOCH: {epoch+1}, TRAIN LOSS:{train_loss:6.5f}, TRAIN ACC: {train_acc*100:.2f}%')
     
     torch.save(model.state_dict(), output_name)
+    print("Saved state dict")
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--batch_size', type=int, default=2, help="INPUT BATCH SIZE") # 64
+parser.add_argument('--batch_size', type=int, default=64, help="INPUT BATCH SIZE") # 64
 parser.add_argument('--num_points', type=int, default=2500, help="NUMBER OF POINTS")
 parser.add_argument('--workers', type=int, help="NUMBER OF DATALOADING WORKERS", default=4)
 parser.add_argument('--nepoch', type=int, default=5, help="NUMBER OF EPOCHS TO TRAIN FOR")
 parser.add_argument('--output_folder', type=str, default='classification', help="OUTPUT FOLDER")
 parser.add_argument('--model', type=str, default='', help="MODEL PATH")
-parser.add_argument('--dataset_path', type=str, default='/home/ncaytuir/data-local/PointNet/data/Shapenetcore_benchmark', help="DATASET PATH")
+parser.add_argument('--dataset_path', type=str, default='/home/ncaytuir/PointNet/data/Shapenetcore_benchmark', help="DATASET PATH")
 parser.add_argument('--dataset_type', type=str, default="shapenet", help="DATASET TYPE")
 parser.add_argument('--feature_transform', action='store_true', help="USE FEATURE TRANSFORM")
 parser.add_argument('--inference', action='store_false', help="INFERENCE")
 
 opt = parser.parse_args()
 print(opt)
+NUM_CLASSES = 16
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+criterion = nn.NLLLoss()
 
 train_set = ShapeNetDataset(root_dir=opt.dataset_path, split_type='train')
 val_set = ShapeNetDataset(root_dir=opt.dataset_path, split_type='val')
@@ -81,40 +94,45 @@ print(f"Validation set length = {len(val_set)}")
 print(f"Test set length = {len(test_set)}")
 
 # Data loaders
-train_loader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, collate_fn=collate_fn)
-val_loader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, collate_fn=collate_fn)
-test_loader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, collate_fn=collate_fn)
+train_loader = torch.utils.data.DataLoader(train_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, drop_last=True, collate_fn=collate_fn)
+val_loader = torch.utils.data.DataLoader(val_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, drop_last=True, collate_fn=collate_fn)
+test_loader = torch.utils.data.DataLoader(test_set, batch_size=opt.batch_size, num_workers=opt.workers, shuffle=True, drop_last=True, collate_fn=collate_fn)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if not opt.inference:
+    # Create model, optimizer, lr_scheduler and pass to training fn
+    classifier = PointNetClassification(NUM_CLASSES)
 
-NUM_CLASSES = 16
-criterion = nn.NLLLoss()
+    optimizer = optim.SGD(classifier.parameters(), lr=0.01, momentum=0.9)
+    if torch.cuda.is_available():
+        classifier.cuda()
 
-# Create model, optimizer, lr_scheduler and pass to training fn
-classifier = PointNetClassification(k = NUM_CLASSES)
+    _ = train(model=classifier, num_epochs=opt.nepoch, criterion=criterion, optimizer=optimizer, dataloader_train=train_loader, device=device)
 
-optimizer = optim.SGD(classifier.parameters(), lr=0.01, momentum=0.9)
-if torch.cuda.is_available():
-    classifier.cuda()
-
-_ = train(model=classifier, num_epochs=opt.nepoch, criterion=criterion, optimizer=optimizer, dataloader_train=train_loader, device=device)
-
-if opt.inference:
-    classifier = PointNetClassification(k = NUM_CLASSES).to(device)
+elif opt.inference:
+    classifier = PointNetClassification(NUM_CLASSES).to(device)
     classifier.load_state_dict(torch.load('pointnet_cls.pth'))
     classifier.eval()
 
     total_loss = 0.0
+    correct = 0
+    total = 0
 
     with torch.no_grad():
         for batch_dict in tqdm(test_loader, total=len(test_loader)):
             x = batch_dict['points'].transpose(1, 2).to(device)
             labels = batch_dict['class_id'].to(device)
-            pred, _, _ = classifier(x)
+            pred = classifier(x)
+
+            # Accuracy
+            _, predicted = torch.max(pred, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
 
             # Compute loss
             loss = criterion(pred, labels)
             total_loss += loss.item()
     
     evaluation_loss = total_loss / len(test_loader)
-    print("EVALUATION LOSS", evaluation_loss)
+    eval_acc = correct / total
+    print("EVALUATION LOSS", round(evaluation_loss, 2))
+    print("EVALUATION ACC", round(eval_acc*100, 2))
